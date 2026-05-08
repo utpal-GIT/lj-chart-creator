@@ -1025,7 +1025,7 @@ with tab_config:
     st.markdown('<div class="section-title">Existing Configurations</div>', unsafe_allow_html=True)
 
     if st.session_state.config_data:
-        # Build single editable table with Mean, SD editable and computed ranges read-only
+        # Display centered config table
         cfg_keys = list(st.session_state.config_data.keys())
         cfg_rows = []
         for key in cfg_keys:
@@ -1043,52 +1043,35 @@ with tab_config:
                 "Mean-3SD": round(m - 3*s, 4),
                 "Mean+3SD": round(m + 3*s, 4),
             })
-        edit_cfg_df = pd.DataFrame(cfg_rows)
-
-        edited_cfg = st.data_editor(
-            edit_cfg_df,
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "Parameter": st.column_config.TextColumn("Parameter", disabled=True),
-                "QC Lot": st.column_config.TextColumn("QC Lot", disabled=True),
-                "Mean": st.column_config.NumberColumn("Mean", format="%.4f"),
-                "SD": st.column_config.NumberColumn("SD", format="%.4f", min_value=0.0001),
-                "Mean-1SD": st.column_config.NumberColumn("Mean-1SD", format="%.4f", disabled=True),
-                "Mean+1SD": st.column_config.NumberColumn("Mean+1SD", format="%.4f", disabled=True),
-                "Mean-2SD": st.column_config.NumberColumn("Mean-2SD", format="%.4f", disabled=True),
-                "Mean+2SD": st.column_config.NumberColumn("Mean+2SD", format="%.4f", disabled=True),
-                "Mean-3SD": st.column_config.NumberColumn("Mean-3SD", format="%.4f", disabled=True),
-                "Mean+3SD": st.column_config.NumberColumn("Mean+3SD", format="%.4f", disabled=True),
-            },
-            key="config_editor",
+        config_df = pd.DataFrame(cfg_rows)
+        st.markdown(
+            config_df.to_html(index=False, classes="config-table", border=0),
+            unsafe_allow_html=True,
         )
 
-        # Detect changes and save back
-        config_changed = False
-        for i, key in enumerate(cfg_keys):
-            new_mean = float(edited_cfg.iloc[i]["Mean"])
-            new_sd = float(edited_cfg.iloc[i]["SD"])
-            old = st.session_state.config_data[key]
-            if abs(new_mean - old["mean"]) > 1e-8 or abs(new_sd - old["sd"]) > 1e-8:
-                st.session_state.config_data[key]["mean"] = new_mean
-                st.session_state.config_data[key]["sd"] = new_sd
-                config_changed = True
-        if config_changed:
-            save_config_data(st.session_state.config_data)
-            st.rerun()
+        # Edit / Delete controls
+        cfg_labels = [f"{c['parameter']} | {c['qc_lot']}" for c in st.session_state.config_data.values()]
+        sel_cfg = st.selectbox("Select configuration", cfg_labels)
+        sel_idx = cfg_labels.index(sel_cfg)
+        sel_key = cfg_keys[sel_idx]
+        sel_data = st.session_state.config_data[sel_key]
 
-        # Delete
-        del_opts = [f"{c['parameter']} | {c['qc_lot']}" for c in st.session_state.config_data.values()]
-        del_keys = list(st.session_state.config_data.keys())
-        dc1, dc2 = st.columns([3, 1])
-        with dc1:
-            del_choice = st.selectbox("Select to remove", del_opts)
-        with dc2:
+        ec1, ec2, ec3, ec4 = st.columns([2, 2, 1, 1])
+        with ec1:
+            new_mean = st.number_input("Mean", value=sel_data["mean"], format="%.4f", key="edit_mean")
+        with ec2:
+            new_sd = st.number_input("SD", value=sel_data["sd"], min_value=0.0001, format="%.4f", key="edit_sd")
+        with ec3:
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("Update", type="primary", use_container_width=True):
+                st.session_state.config_data[sel_key]["mean"] = new_mean
+                st.session_state.config_data[sel_key]["sd"] = new_sd
+                save_config_data(st.session_state.config_data)
+                st.rerun()
+        with ec4:
             st.markdown("<br>", unsafe_allow_html=True)
             if st.button("Remove", use_container_width=True):
-                idx = del_opts.index(del_choice)
-                del st.session_state.config_data[del_keys[idx]]
+                del st.session_state.config_data[sel_key]
                 save_config_data(st.session_state.config_data)
                 st.rerun()
     else:
