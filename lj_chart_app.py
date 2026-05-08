@@ -1069,7 +1069,7 @@ with tab_config:
         sel_key = cfg_keys[sel_idx]
         sel_data = st.session_state.config_data[sel_key]
 
-        ec1, ec2, ec3, ec4 = st.columns([2, 2, 1, 1])
+        ec1, ec2, ec3, ec4, ec5 = st.columns([2, 2, 1, 1, 1])
         with ec1:
             new_mean = st.number_input("Mean", value=sel_data["mean"], format="%.4f", key="edit_mean")
         with ec2:
@@ -1085,6 +1085,12 @@ with tab_config:
             st.markdown("<br>", unsafe_allow_html=True)
             if st.button("Remove", use_container_width=True):
                 del st.session_state.config_data[sel_key]
+                save_config_data(st.session_state.config_data)
+                st.rerun()
+        with ec5:
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("Clear All", use_container_width=True, key="clear_configs"):
+                st.session_state.config_data = {}
                 save_config_data(st.session_state.config_data)
                 st.rerun()
     else:
