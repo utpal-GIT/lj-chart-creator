@@ -43,7 +43,9 @@ def load_qc_data():
 
             # Fix types to match what st.data_editor expects
             df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
-            df["Include"] = df["Include"].fillna(True).astype("boolean")
+            # Ensure Include is properly boolean — treat None/NaN as True
+            df["Include"] = df["Include"].map(lambda x: True if x is None or (isinstance(x, float) and pd.isna(x)) else bool(x))
+            df["Include"] = pd.array(df["Include"].tolist(), dtype="boolean")
             for col in ["Analyzer ID", "Parameter", "QC Lot", "Reagent Lot", "QC Result"]:
                 df[col] = df[col].fillna("").astype(str).replace("None", "").replace("nan", "")
 
