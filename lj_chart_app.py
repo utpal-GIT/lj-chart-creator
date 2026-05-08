@@ -32,11 +32,22 @@ def load_qc_data():
     if QC_DATA_FILE.exists():
         try:
             df = pd.read_json(QC_DATA_FILE, orient="records")
-            if len(df) > 0 and "Date" in df.columns:
-                df["Date"] = pd.to_datetime(df["Date"])
-                if "Include" in df.columns:
-                    df["Include"] = df["Include"].astype("boolean")
-                return df
+            if len(df) == 0:
+                return None
+
+            # Ensure correct column order and types
+            expected_cols = ["Include", "Analyzer ID", "Parameter", "Date", "QC Lot", "Reagent Lot", "QC Result"]
+            for col in expected_cols:
+                if col not in df.columns:
+                    df[col] = "" if col != "Include" else True
+
+            # Fix types to match what st.data_editor expects
+            df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+            df["Include"] = df["Include"].fillna(True).astype("boolean")
+            for col in ["Analyzer ID", "Parameter", "QC Lot", "Reagent Lot", "QC Result"]:
+                df[col] = df[col].fillna("").astype(str).replace("None", "").replace("nan", "")
+
+            return df[expected_cols]
         except Exception:
             pass
     return None
