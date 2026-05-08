@@ -1025,14 +1025,53 @@ with tab_config:
     st.markdown('<div class="section-title">Existing Configurations</div>', unsafe_allow_html=True)
 
     if st.session_state.config_data:
-        rows = []
-        for key, cfg in st.session_state.config_data.items():
-            m, s = cfg["mean"], cfg["sd"]
-            rows.append({
+        # Build editable table with Mean and SD columns
+        cfg_keys = list(st.session_state.config_data.keys())
+        cfg_rows = []
+        for key in cfg_keys:
+            cfg = st.session_state.config_data[key]
+            cfg_rows.append({
                 "Parameter": cfg["parameter"],
                 "QC Lot": cfg["qc_lot"],
-                "Mean": round(m, 4),
-                "SD": round(s, 4),
+                "Mean": round(cfg["mean"], 4),
+                "SD": round(cfg["sd"], 4),
+            })
+        edit_cfg_df = pd.DataFrame(cfg_rows)
+
+        edited_cfg = st.data_editor(
+            edit_cfg_df,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Parameter": st.column_config.TextColumn("Parameter", disabled=True),
+                "QC Lot": st.column_config.TextColumn("QC Lot", disabled=True),
+                "Mean": st.column_config.NumberColumn("Mean", format="%.4f"),
+                "SD": st.column_config.NumberColumn("SD", format="%.4f", min_value=0.0001),
+            },
+            key="config_editor",
+        )
+
+        # Detect changes and save back
+        config_changed = False
+        for i, key in enumerate(cfg_keys):
+            new_mean = float(edited_cfg.iloc[i]["Mean"])
+            new_sd = float(edited_cfg.iloc[i]["SD"])
+            old = st.session_state.config_data[key]
+            if abs(new_mean - old["mean"]) > 1e-8 or abs(new_sd - old["sd"]) > 1e-8:
+                st.session_state.config_data[key]["mean"] = new_mean
+                st.session_state.config_data[key]["sd"] = new_sd
+                config_changed = True
+        if config_changed:
+            save_config_data(st.session_state.config_data)
+
+        # Computed SD ranges (read-only display below)
+        range_rows = []
+        for key in cfg_keys:
+            cfg = st.session_state.config_data[key]
+            m, s = cfg["mean"], cfg["sd"]
+            range_rows.append({
+                "Parameter": cfg["parameter"],
+                "QC Lot": cfg["qc_lot"],
                 "Mean-1SD": round(m - s, 4),
                 "Mean+1SD": round(m + s, 4),
                 "Mean-2SD": round(m - 2*s, 4),
@@ -1040,9 +1079,9 @@ with tab_config:
                 "Mean-3SD": round(m - 3*s, 4),
                 "Mean+3SD": round(m + 3*s, 4),
             })
-        config_df = pd.DataFrame(rows)
+        range_df = pd.DataFrame(range_rows)
         st.markdown(
-            config_df.to_html(index=False, classes="config-table", border=0),
+            range_df.to_html(index=False, classes="config-table", border=0),
             unsafe_allow_html=True,
         )
 
