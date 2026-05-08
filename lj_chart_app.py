@@ -9,8 +9,55 @@ import pandas as pd
 import plotly.graph_objects as go
 import numpy as np
 from datetime import datetime, date, time
+from pathlib import Path
 import json
 import io
+
+# ─── Persistence (auto-save / auto-load) ─────────────────────────────────────
+DATA_DIR = Path(__file__).parent / "data"
+DATA_DIR.mkdir(exist_ok=True)
+QC_DATA_FILE = DATA_DIR / "qc_data.json"
+CONFIG_FILE = DATA_DIR / "config_data.json"
+
+
+def save_qc_data(df):
+    """Save QC data DataFrame to JSON."""
+    records = df.copy()
+    records["Date"] = records["Date"].astype(str)
+    records.to_json(QC_DATA_FILE, orient="records", indent=2)
+
+
+def load_qc_data():
+    """Load QC data from JSON if it exists."""
+    if QC_DATA_FILE.exists():
+        try:
+            df = pd.read_json(QC_DATA_FILE, orient="records")
+            if len(df) > 0 and "Date" in df.columns:
+                df["Date"] = pd.to_datetime(df["Date"])
+                if "Include" in df.columns:
+                    df["Include"] = df["Include"].astype("boolean")
+                return df
+        except Exception:
+            pass
+    return None
+
+
+def save_config_data(config):
+    """Save config dict to JSON."""
+    with open(CONFIG_FILE, "w") as f:
+        json.dump(config, f, indent=2)
+
+
+def load_config_data():
+    """Load config dict from JSON if it exists."""
+    if CONFIG_FILE.exists():
+        try:
+            with open(CONFIG_FILE, "r") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return None
+
 
 # ─── Page Config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -238,17 +285,22 @@ document.addEventListener('keydown', function(e) {
 # ─── Session State Initialization ──────────────────────────────────────────────
 def init_session_state():
     if "qc_data" not in st.session_state:
-        st.session_state.qc_data = pd.DataFrame({
-            "Include": pd.array([True] * 10, dtype="boolean"),
-            "Analyzer ID": [""] * 10,
-            "Parameter": [""] * 10,
-            "Date": [datetime.now().replace(second=0, microsecond=0)] * 10,
-            "QC Lot": [""] * 10,
-            "Reagent Lot": [""] * 10,
-            "QC Result": [""] * 10,
-        })
+        saved = load_qc_data()
+        if saved is not None:
+            st.session_state.qc_data = saved
+        else:
+            st.session_state.qc_data = pd.DataFrame({
+                "Include": pd.array([True] * 10, dtype="boolean"),
+                "Analyzer ID": [""] * 10,
+                "Parameter": [""] * 10,
+                "Date": [datetime.now().replace(second=0, microsecond=0)] * 10,
+                "QC Lot": [""] * 10,
+                "Reagent Lot": [""] * 10,
+                "QC Result": [""] * 10,
+            })
     if "config_data" not in st.session_state:
-        st.session_state.config_data = {}
+        saved_cfg = load_config_data()
+        st.session_state.config_data = saved_cfg if saved_cfg else {}
 
 init_session_state()
 
@@ -647,6 +699,7 @@ with tab_chart:
                         imported_df["Date"] = pd.to_datetime(imported_df["Date"])
                         imported_df["QC Result"] = imported_df["QC Result"].astype(str)
                         st.session_state.qc_data = imported_df[["Include", "Analyzer ID", "Parameter", "Date", "QC Lot", "Reagent Lot", "QC Result"]]
+                        save_qc_data(st.session_state.qc_data)
                         st.success(f"Imported {len(imported_df)} rows!")
                         st.rerun()
                     else:
@@ -675,6 +728,8 @@ with tab_chart:
                 })
                 key = get_config_key("Glucose", "LOT-2024-001")
                 st.session_state.config_data[key] = {"parameter": "Glucose", "qc_lot": "LOT-2024-001", "mean": 5.5, "sd": 0.15}
+                save_qc_data(st.session_state.qc_data)
+                save_config_data(st.session_state.config_data)
                 st.rerun()
 
     # ══════════════════════════════════════════════════════════════════════════
@@ -696,14 +751,17 @@ with tab_chart:
                 "QC Result": [""],
             })
             st.session_state.qc_data = pd.concat([st.session_state.qc_data, new_row], ignore_index=True)
+            save_qc_data(st.session_state.qc_data)
             st.rerun()
     with bc2:
         if st.button("Select All", use_container_width=True):
             st.session_state.qc_data["Include"] = True
+            save_qc_data(st.session_state.qc_data)
             st.rerun()
     with bc3:
         if st.button("Deselect All", use_container_width=True):
             st.session_state.qc_data["Include"] = False
+            save_qc_data(st.session_state.qc_data)
             st.rerun()
 
     # Fixed height for 10 visible rows; extra rows scroll inside
@@ -729,6 +787,7 @@ with tab_chart:
     for col in ["Analyzer ID", "Parameter", "QC Lot", "Reagent Lot", "QC Result"]:
         edited_df[col] = edited_df[col].fillna("").astype(str).replace("None", "").replace("nan", "")
     st.session_state.qc_data = edited_df
+    save_qc_data(edited_df)
 
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 2: FILTERS (built from edited_df so they detect current data)
@@ -943,6 +1002,7 @@ with tab_config:
                     "parameter": cfg_param.strip(), "qc_lot": cfg_lot.strip(),
                     "mean": cfg_mean, "sd": cfg_sd,
                 }
+                save_config_data(st.session_state.config_data)
                 st.success(f"Saved: {cfg_param} / {cfg_lot}")
                 st.rerun()
             else:
@@ -984,6 +1044,7 @@ with tab_config:
             if st.button("Remove", use_container_width=True):
                 idx = del_opts.index(del_choice)
                 del st.session_state.config_data[del_keys[idx]]
+                save_config_data(st.session_state.config_data)
                 st.rerun()
     else:
         st.warning("No configurations yet. Add one above to get started.")
@@ -1003,6 +1064,7 @@ with tab_config:
             try:
                 imp = json.loads(up_cfg.read().decode())
                 st.session_state.config_data.update(imp)
+                save_config_data(st.session_state.config_data)
                 st.success(f"Imported {len(imp)} configs!")
                 st.rerun()
             except Exception as e:
