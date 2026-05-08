@@ -751,7 +751,7 @@ with tab_chart:
     st.markdown('<div class="section-title">QC Data Entry</div>', unsafe_allow_html=True)
 
     # Table action buttons
-    bc1, bc2, bc3, bc_spacer = st.columns([1, 1, 1, 5])
+    bc1, bc2, bc3, bc4, bc_spacer = st.columns([1, 1, 1, 1, 4])
     with bc1:
         if st.button("+ Add Row", use_container_width=True):
             new_row = pd.DataFrame({
@@ -774,6 +774,19 @@ with tab_chart:
     with bc3:
         if st.button("Deselect All", use_container_width=True):
             st.session_state.qc_data["Include"] = False
+            save_qc_data(st.session_state.qc_data)
+            st.rerun()
+    with bc4:
+        if st.button("Clear All", use_container_width=True):
+            st.session_state.qc_data = pd.DataFrame({
+                "Include": pd.array([True] * 10, dtype="boolean"),
+                "Analyzer ID": [""] * 10,
+                "Parameter": [""] * 10,
+                "Date": [datetime.now().replace(second=0, microsecond=0)] * 10,
+                "QC Lot": [""] * 10,
+                "Reagent Lot": [""] * 10,
+                "QC Result": [""] * 10,
+            })
             save_qc_data(st.session_state.qc_data)
             st.rerun()
 
