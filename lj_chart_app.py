@@ -567,8 +567,8 @@ def build_lj_chart(df, mean, sd, parameter, qc_lot, westgard_results):
 
         for gk, idx_list in sub_groups.items():
             color = group_color_map[gk]
-            border_color = 'white' if sev == 'pass' else ('#7c2d12' if sev == 'warning' else '#ef4444')
-            border_width = 1.5 if sev == 'pass' else (2 if sev == 'warning' else 3.5)
+            border_color = 'white' if sev == 'pass' else ('#eab308' if sev == 'warning' else '#ef4444')
+            border_width = 1.5 if sev == 'pass' else (3 if sev == 'warning' else 3.5)
 
             # Legend: show group name if multiple groups, otherwise show severity
             if show_group_legend:
