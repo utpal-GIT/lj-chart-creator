@@ -669,7 +669,7 @@ def build_lj_chart(df, mean, sd, parameter, qc_lot, westgard_results):
     CLR_REJECT_BAND = 'rgba(239,68,68,0.12)'    # soft red
     CLR_WARN_BAND   = 'rgba(251,191,36,0.14)'   # soft amber
     CLR_PASS_BAND   = 'rgba(52,211,153,0.13)'   # soft emerald
-    CLR_MEAN_LINE   = '#0f172a'                  # slate-900
+    CLR_MEAN_LINE   = '#10b981'                  # emerald-500 (green)
     CLR_1SD_LINE    = '#6366f1'                  # indigo-500
     CLR_2SD_LINE    = '#f59e0b'                  # amber-500
     CLR_3SD_LINE    = '#ef4444'                  # red-500
@@ -702,7 +702,7 @@ def build_lj_chart(df, mean, sd, parameter, qc_lot, westgard_results):
         (3, CLR_3SD_LINE, "dash", 1.5),
         (2, CLR_2SD_LINE, "dashdot", 1.5),
         (1, CLR_1SD_LINE, "dot", 1.2),
-        (0, CLR_MEAN_LINE, "solid", 2.5),
+        (0, CLR_MEAN_LINE, "solid", 1.5),
         (-1, CLR_1SD_LINE, "dot", 1.2),
         (-2, CLR_2SD_LINE, "dashdot", 1.5),
         (-3, CLR_3SD_LINE, "dash", 1.5),
