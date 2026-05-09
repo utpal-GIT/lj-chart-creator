@@ -306,7 +306,7 @@ def init_session_state():
                 "Include": pd.array([True] * 10, dtype="boolean"),
                 "Analyzer ID": [""] * 10,
                 "Parameter": [""] * 10,
-                "Date": [datetime.now().replace(second=0, microsecond=0)] * 10,
+                "Date": pd.array([pd.NaT] * 10),
                 "QC Lot": [""] * 10,
                 "Reagent Lot": [""] * 10,
                 "QC Result": [""] * 10,
@@ -758,7 +758,7 @@ with tab_chart:
                 "Include": pd.array([True], dtype="boolean"),
                 "Analyzer ID": [""],
                 "Parameter": [""],
-                "Date": [datetime.now().replace(second=0, microsecond=0)],
+                "Date": pd.array([pd.NaT]),
                 "QC Lot": [""],
                 "Reagent Lot": [""],
                 "QC Result": [""],
@@ -782,7 +782,7 @@ with tab_chart:
                 "Include": pd.array([True] * 10, dtype="boolean"),
                 "Analyzer ID": [""] * 10,
                 "Parameter": [""] * 10,
-                "Date": [datetime.now().replace(second=0, microsecond=0)] * 10,
+                "Date": pd.array([pd.NaT] * 10),
                 "QC Lot": [""] * 10,
                 "Reagent Lot": [""] * 10,
                 "QC Result": [""] * 10,
@@ -790,14 +790,14 @@ with tab_chart:
             save_qc_data(st.session_state.qc_data)
             st.rerun()
     with bc5:
-        if st.button("Delete Unchecked", use_container_width=True):
-            kept = st.session_state.qc_data[st.session_state.qc_data["Include"] == True].reset_index(drop=True)
+        if st.button("Delete Selected", use_container_width=True):
+            kept = st.session_state.qc_data[st.session_state.qc_data["Include"] != True].reset_index(drop=True)
             if len(kept) == 0:
                 kept = pd.DataFrame({
                     "Include": pd.array([True] * 5, dtype="boolean"),
                     "Analyzer ID": [""] * 5,
                     "Parameter": [""] * 5,
-                    "Date": [datetime.now().replace(second=0, microsecond=0)] * 5,
+                    "Date": pd.array([pd.NaT] * 5),
                     "QC Lot": [""] * 5,
                     "Reagent Lot": [""] * 5,
                     "QC Result": [""] * 5,
