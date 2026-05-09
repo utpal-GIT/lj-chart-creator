@@ -1,0 +1,8 @@
+[server]
+# Keep disconnected sessions alive for 2 hours (7200 seconds, default is 120)
+disconnectedSessionTTL = 7200
+maxMessageSize = 200
+enableXsrfProtection = true
+
+[browser]
+gatherUsageStats = false

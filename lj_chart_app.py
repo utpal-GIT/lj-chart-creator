@@ -1118,6 +1118,8 @@ with tab_chart:
         clean_df[col] = clean_df[col].fillna("").astype(str).replace("None", "").replace("nan", "")
     # Save to disk without overwriting the widget's source DataFrame
     save_qc_data(clean_df)
+    # Store cleaned data for other tabs (e.g. Configurer dropdowns)
+    st.session_state._clean_qc_data = clean_df
 
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 2: FILTERS (built from edited_df so they detect current data)
@@ -1309,9 +1311,10 @@ with tab_config:
     # Add config form
     st.markdown('<div class="section-title">Add / Update Configuration</div>', unsafe_allow_html=True)
 
-    # Auto-extract unique Parameter and QC Lot values from the data table
-    available_params = sorted([p for p in st.session_state.qc_data["Parameter"].dropna().unique() if str(p).strip()])
-    available_lots = sorted([l for l in st.session_state.qc_data["QC Lot"].dropna().unique() if str(l).strip()])
+    # Auto-extract unique Parameter and QC Lot values from the latest edited data
+    _src_df = st.session_state.get("_clean_qc_data", st.session_state.qc_data)
+    available_params = sorted([p for p in _src_df["Parameter"].dropna().unique() if str(p).strip()])
+    available_lots = sorted([l for l in _src_df["QC Lot"].dropna().unique() if str(l).strip()])
 
     cc1, cc2, cc3, cc4, cc5 = st.columns([2, 2, 1.5, 1.5, 1])
     with cc1:
