@@ -12,26 +12,169 @@ from datetime import datetime, date, time
 from pathlib import Path
 import json
 import io
+import hashlib
+import secrets
 
-# ─── Persistence (auto-save / auto-load) ─────────────────────────────────────
-DATA_DIR = Path(__file__).parent / "data"
-DATA_DIR.mkdir(exist_ok=True)
+# ─── Authentication ──────────────────────────────────────────────────────────
+BASE_DATA_DIR = Path(__file__).parent / "data"
+BASE_DATA_DIR.mkdir(exist_ok=True)
+CREDENTIALS_FILE = BASE_DATA_DIR / "credentials.json"
+
+
+def _hash_password(password: str, salt: str = None) -> tuple:
+    """Hash a password with a random salt using SHA-256."""
+    if salt is None:
+        salt = secrets.token_hex(16)
+    hashed = hashlib.sha256((salt + password).encode()).hexdigest()
+    return hashed, salt
+
+
+def load_credentials() -> dict:
+    """Load credentials from JSON file."""
+    if CREDENTIALS_FILE.exists():
+        try:
+            with open(CREDENTIALS_FILE, "r") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+
+def save_credentials(creds: dict):
+    """Save credentials to JSON file."""
+    with open(CREDENTIALS_FILE, "w") as f:
+        json.dump(creds, f, indent=2)
+
+
+def verify_password(username: str, password: str) -> bool:
+    """Verify a username/password against stored credentials."""
+    creds = load_credentials()
+    if username not in creds:
+        return False
+    stored = creds[username]
+    hashed, _ = _hash_password(password, stored["salt"])
+    return hashed == stored["hash"]
+
+
+def create_user(username: str, password: str, display_name: str = "", role: str = "user"):
+    """Create a new user with hashed password and role."""
+    creds = load_credentials()
+    hashed, salt = _hash_password(password)
+    creds[username] = {
+        "hash": hashed,
+        "salt": salt,
+        "display_name": display_name or username,
+        "role": role,
+    }
+    save_credentials(creds)
+
+
+def get_display_name(username: str) -> str:
+    """Get the display name for a user."""
+    creds = load_credentials()
+    if username in creds:
+        return creds[username].get("display_name", username)
+    return username
+
+
+def get_user_role(username: str) -> str:
+    """Get the role for a user ('admin' or 'user')."""
+    creds = load_credentials()
+    if username in creds:
+        return creds[username].get("role", "user")
+    return "user"
+
+
+def update_user(username: str, display_name: str = None, role: str = None, password: str = None):
+    """Update an existing user's details."""
+    creds = load_credentials()
+    if username not in creds:
+        return False
+    if display_name is not None:
+        creds[username]["display_name"] = display_name
+    if role is not None:
+        creds[username]["role"] = role
+    if password is not None:
+        hashed, salt = _hash_password(password)
+        creds[username]["hash"] = hashed
+        creds[username]["salt"] = salt
+    save_credentials(creds)
+    return True
+
+
+def delete_user(username: str) -> bool:
+    """Delete a user from credentials."""
+    creds = load_credentials()
+    if username not in creds:
+        return False
+    del creds[username]
+    save_credentials(creds)
+    return True
+
+
+def list_all_users() -> list:
+    """Return a list of all users with their details (no password hashes)."""
+    creds = load_credentials()
+    users = []
+    for uname, info in creds.items():
+        users.append({
+            "username": uname,
+            "display_name": info.get("display_name", uname),
+            "role": info.get("role", "user"),
+        })
+    return users
+
+
+# Create default admin user if no credentials exist
+if not CREDENTIALS_FILE.exists() or not load_credentials():
+    create_user("admin", "admin123", "Administrator", role="admin")
+else:
+    # Migrate: ensure all existing users have a 'role' field
+    _creds = load_credentials()
+    _migrated = False
+    for _u, _info in _creds.items():
+        if "role" not in _info:
+            # First user (typically 'admin') gets admin role; rest get 'user'
+            _info["role"] = "admin" if _u == "admin" else "user"
+            _migrated = True
+    if _migrated:
+        save_credentials(_creds)
+
+
+# ─── Persistence (auto-save / auto-load) — per-user directories ─────────────
+def _get_user_data_dir(username: str) -> Path:
+    """Get the data directory for a specific user."""
+    user_dir = BASE_DATA_DIR / username
+    user_dir.mkdir(exist_ok=True)
+    return user_dir
+
+
+def _get_data_paths(username: str) -> tuple:
+    """Get QC data and config file paths for a user."""
+    user_dir = _get_user_data_dir(username)
+    return user_dir / "qc_data.json", user_dir / "config_data.json"
+
+
+# Legacy globals — will be set after login
+DATA_DIR = BASE_DATA_DIR
 QC_DATA_FILE = DATA_DIR / "qc_data.json"
 CONFIG_FILE = DATA_DIR / "config_data.json"
 
 
 def save_qc_data(df):
-    """Save QC data DataFrame to JSON."""
+    """Save QC data DataFrame to JSON (user-specific)."""
+    qc_file, _ = _get_data_paths(st.session_state.get("logged_in_user", "_default"))
     records = df.copy()
     records["Date"] = records["Date"].astype(str)
-    records.to_json(QC_DATA_FILE, orient="records", indent=2)
+    records.to_json(qc_file, orient="records", indent=2)
 
 
 def load_qc_data():
-    """Load QC data from JSON if it exists."""
-    if QC_DATA_FILE.exists():
+    """Load QC data from JSON if it exists (user-specific)."""
+    qc_file, _ = _get_data_paths(st.session_state.get("logged_in_user", "_default"))
+    if qc_file.exists():
         try:
-            df = pd.read_json(QC_DATA_FILE, orient="records")
+            df = pd.read_json(qc_file, orient="records")
             if len(df) == 0:
                 return None
 
@@ -56,16 +199,18 @@ def load_qc_data():
 
 
 def save_config_data(config):
-    """Save config dict to JSON."""
-    with open(CONFIG_FILE, "w") as f:
+    """Save config dict to JSON (user-specific)."""
+    _, cfg_file = _get_data_paths(st.session_state.get("logged_in_user", "_default"))
+    with open(cfg_file, "w") as f:
         json.dump(config, f, indent=2)
 
 
 def load_config_data():
-    """Load config dict from JSON if it exists."""
-    if CONFIG_FILE.exists():
+    """Load config dict from JSON if it exists (user-specific)."""
+    _, cfg_file = _get_data_paths(st.session_state.get("logged_in_user", "_default"))
+    if cfg_file.exists():
         try:
-            with open(CONFIG_FILE, "r") as f:
+            with open(cfg_file, "r") as f:
                 return json.load(f)
         except Exception:
             pass
@@ -273,6 +418,46 @@ st.markdown("""
         padding: 16px;
         margin-bottom: 12px;
     }
+
+    /* Login page */
+    .login-container {
+        max-width: 420px;
+        margin: 60px auto;
+        padding: 40px;
+        background: white;
+        border-radius: 16px;
+        box-shadow: 0 4px 24px rgba(0,0,0,0.08);
+        border: 1px solid #e2e8f0;
+    }
+    .login-header {
+        text-align: center;
+        margin-bottom: 32px;
+    }
+    .login-header h1 {
+        font-size: 1.6em;
+        color: #0f172a;
+        margin: 0 0 6px 0;
+    }
+    .login-header p {
+        color: #64748b;
+        font-size: 0.9em;
+        margin: 0;
+    }
+    .login-icon {
+        font-size: 2.5em;
+        margin-bottom: 12px;
+    }
+    .user-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        background: #f1f5f9;
+        padding: 4px 12px;
+        border-radius: 20px;
+        font-size: 0.8em;
+        font-weight: 600;
+        color: #334155;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -295,7 +480,54 @@ document.addEventListener('keydown', function(e) {
 """, unsafe_allow_html=True)
 
 
-# ─── Session State Initialization ──────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+# LOGIN GATE — show login screen if not authenticated
+# ═══════════════════════════════════════════════════════════════════════════════
+if "logged_in_user" not in st.session_state:
+    st.session_state.logged_in_user = None
+
+if st.session_state.logged_in_user is None:
+    st.markdown("""
+    <div class="login-container">
+        <div class="login-header">
+            <div class="login-icon">📊</div>
+            <h1>LJ Chart Creator</h1>
+            <p>Clinical QC Management with Westgard Rules</p>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Center the form using columns
+    _, login_col, _ = st.columns([1.5, 1, 1.5])
+    with login_col:
+        with st.form("login_form"):
+            username = st.text_input("Username", placeholder="Enter your username")
+            password = st.text_input("Password", type="password", placeholder="Enter your password")
+            submit = st.form_submit_button("Sign In", use_container_width=True, type="primary")
+
+            if submit:
+                if username and password:
+                    if verify_password(username.strip().lower(), password):
+                        st.session_state.logged_in_user = username.strip().lower()
+                        # Clear any stale session data so fresh user data loads
+                        for key in ["qc_data", "config_data"]:
+                            if key in st.session_state:
+                                del st.session_state[key]
+                        st.rerun()
+                    else:
+                        st.error("Invalid username or password.")
+                else:
+                    st.warning("Please enter both username and password.")
+
+        st.markdown(
+            '<p style="text-align:center; color:#94a3b8; font-size:0.8em; margin-top:16px;">'
+            'Contact your administrator for login credentials.</p>',
+            unsafe_allow_html=True,
+        )
+    st.stop()
+
+
+# ─── Session State Initialization (runs only after login) ────────────────────
 def init_session_state():
     if "qc_data" not in st.session_state:
         saved = load_qc_data()
@@ -430,7 +662,7 @@ def get_config_key(parameter, qc_lot):
 
 def build_lj_chart(df, mean, sd, parameter, qc_lot, westgard_results):
     fig = go.Figure()
-    dates = pd.to_datetime(df["Date"]).dt.strftime("%d %b %Y, %H:%M").tolist()
+    dates = pd.to_datetime(df["Date"]).dt.strftime("%d %b %Y, %H:%M").fillna("No Date").tolist()
     values = df["QC Result"].tolist()
 
     # Modern color palette
@@ -666,17 +898,72 @@ def build_lj_chart(df, mean, sd, parameter, qc_lot, westgard_results):
 # ═══════════════════════════════════════════════════════════════════════════════
 # HEADER
 # ═══════════════════════════════════════════════════════════════════════════════
-st.markdown("""
-<div class="app-header">
-    <h1>📊 LJ Chart Creator</h1>
-    <span>Clinical QC Management with Westgard Rules</span>
-</div>
-""", unsafe_allow_html=True)
+current_user = st.session_state.logged_in_user
+current_role = get_user_role(current_user)
+display_name = get_display_name(current_user)
+is_admin = current_role == "admin"
+
+hdr_left, hdr_right = st.columns([5, 1])
+with hdr_left:
+    role_color = "#3b82f6" if is_admin else "#64748b"
+    role_label = "Admin" if is_admin else "User"
+    st.markdown(f"""
+    <div class="app-header">
+        <h1>📊 LJ Chart Creator</h1>
+        <span>Clinical QC Management with Westgard Rules</span>
+        <span style="margin-left:auto;">
+            <span class="user-badge">👤 {display_name}</span>
+            <span class="user-badge" style="background:{role_color}; color:white; margin-left:4px;">{role_label}</span>
+        </span>
+    </div>
+    """, unsafe_allow_html=True)
+with hdr_right:
+    st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+    hr1, hr2 = st.columns(2)
+    with hr1:
+        if st.button("🔑", use_container_width=True, help="Change Password"):
+            st.session_state["show_change_password"] = not st.session_state.get("show_change_password", False)
+    with hr2:
+        if st.button("🚪", use_container_width=True, help="Logout"):
+            for key in list(st.session_state.keys()):
+                del st.session_state[key]
+            st.rerun()
+
+# ── Change Password Panel ────────────────────────────────────────────────────
+if st.session_state.get("show_change_password", False):
+    with st.container():
+        st.markdown('<div class="section-title">Change Password</div>', unsafe_allow_html=True)
+        cp1, cp2, cp3, cp4 = st.columns([2, 2, 2, 1])
+        with cp1:
+            cur_pass = st.text_input("Current Password", type="password", key="cp_current")
+        with cp2:
+            new_pass = st.text_input("New Password", type="password", key="cp_new")
+        with cp3:
+            confirm_pass = st.text_input("Confirm New Password", type="password", key="cp_confirm")
+        with cp4:
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("Update Password", type="primary", use_container_width=True):
+                if not cur_pass or not new_pass or not confirm_pass:
+                    st.error("All fields are required.")
+                elif not verify_password(current_user, cur_pass):
+                    st.error("Current password is incorrect.")
+                elif new_pass != confirm_pass:
+                    st.error("New passwords do not match.")
+                elif len(new_pass) < 4:
+                    st.error("Password must be at least 4 characters.")
+                else:
+                    update_user(current_user, password=new_pass)
+                    st.session_state["show_change_password"] = False
+                    st.success("Password changed successfully!")
+                    st.rerun()
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # TOP TABS
 # ═══════════════════════════════════════════════════════════════════════════════
-tab_chart, tab_config = st.tabs(["📈  LJ Chart", "⚙️  LJ Configurer"])
+if is_admin:
+    tab_chart, tab_config, tab_admin = st.tabs(["📈  LJ Chart", "⚙️  LJ Configurer", "👥  User Management"])
+else:
+    tab_chart, tab_config = st.tabs(["📈  LJ Chart", "⚙️  LJ Configurer"])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -880,7 +1167,7 @@ with tab_chart:
                 (work_df["Parameter"] == sel_param) &
                 (work_df["QC Lot"] == sel_qc)
             ].copy()
-            chart_df = chart_df.dropna(subset=["QC Result"])
+            chart_df = chart_df.dropna(subset=["QC Result", "Date"])
 
             if sel_analyzer != "All":
                 chart_df = chart_df[chart_df["Analyzer ID"].astype(str) == sel_analyzer]
@@ -897,7 +1184,12 @@ with tab_chart:
                 st.warning("No data points match the selected filters.")
             else:
                 # Option to deselect specific data points from the chart
-                point_labels = [f"#{i+1} | {pd.Timestamp(chart_df.iloc[i]['Date']).strftime('%d %b %Y, %H:%M')} | {float(chart_df.iloc[i]['QC Result']):.2f}"
+                def _fmt_date(dt):
+                    try:
+                        return pd.Timestamp(dt).strftime('%d %b %Y, %H:%M')
+                    except (ValueError, TypeError):
+                        return "No Date"
+                point_labels = [f"#{i+1} | {_fmt_date(chart_df.iloc[i]['Date'])} | {float(chart_df.iloc[i]['QC Result']):.2f}"
                                 for i in range(len(chart_df))]
                 excluded = st.multiselect(
                     "Exclude data points from chart (click to deselect)",
@@ -1133,3 +1425,100 @@ with tab_config:
                 st.rerun()
             except Exception as e:
                 st.error(f"Invalid file: {e}")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TAB 3: USER MANAGEMENT (admin only)
+# ═══════════════════════════════════════════════════════════════════════════════
+if is_admin:
+    with tab_admin:
+
+        # ── Add New User ─────────────────────────────────────────────────────
+        st.markdown('<div class="section-title">Add New User</div>', unsafe_allow_html=True)
+
+        nu1, nu2, nu3, nu4, nu5 = st.columns([2, 2, 2, 1.5, 1])
+        with nu1:
+            new_username = st.text_input("Username", placeholder="e.g. lab_tech_1", key="new_user_name")
+        with nu2:
+            new_display = st.text_input("Display Name", placeholder="e.g. Dr. Sharma", key="new_user_display")
+        with nu3:
+            new_password = st.text_input("Password", type="password", key="new_user_pass")
+        with nu4:
+            new_role = st.selectbox("Role", ["user", "admin"], key="new_user_role")
+        with nu5:
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("Create User", type="primary", use_container_width=True):
+                uname = new_username.strip().lower()
+                if not uname or not new_password:
+                    st.error("Username and password are required.")
+                elif uname in [u["username"] for u in list_all_users()]:
+                    st.error(f"User '{uname}' already exists.")
+                else:
+                    create_user(uname, new_password, new_display.strip() or uname, role=new_role)
+                    st.success(f"User '{uname}' created as {new_role}.")
+                    st.rerun()
+
+        # ── Existing Users Table ─────────────────────────────────────────────
+        st.markdown('<div class="section-title">Existing Users</div>', unsafe_allow_html=True)
+
+        all_users = list_all_users()
+        if all_users:
+            # Build HTML table
+            user_rows_html = ""
+            for u in all_users:
+                role_badge_color = "#3b82f6" if u["role"] == "admin" else "#64748b"
+                user_rows_html += f"""
+                <tr>
+                    <td>{u['username']}</td>
+                    <td>{u['display_name']}</td>
+                    <td><span style="background:{role_badge_color}; color:white; padding:2px 10px;
+                         border-radius:12px; font-size:0.85em; font-weight:600;">{u['role'].capitalize()}</span></td>
+                </tr>"""
+
+            st.markdown(f"""
+            <table class="config-table">
+                <thead><tr><th>Username</th><th>Display Name</th><th>Role</th></tr></thead>
+                <tbody>{user_rows_html}</tbody>
+            </table>
+            """, unsafe_allow_html=True)
+
+            st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
+
+            # ── Edit / Delete User ───────────────────────────────────────────
+            st.markdown('<div class="section-title">Edit / Delete User</div>', unsafe_allow_html=True)
+
+            user_labels = [f"{u['username']}  ({u['display_name']})" for u in all_users]
+            sel_user_label = st.selectbox("Select user", user_labels, key="admin_sel_user")
+            sel_user_idx = user_labels.index(sel_user_label)
+            sel_user = all_users[sel_user_idx]
+
+            eu1, eu2, eu3, eu4 = st.columns([2, 2, 1.5, 1])
+            with eu1:
+                edit_display = st.text_input("Display Name", value=sel_user["display_name"], key="edit_user_display")
+            with eu2:
+                edit_role = st.selectbox("Role", ["user", "admin"],
+                                        index=0 if sel_user["role"] == "user" else 1,
+                                        key="edit_user_role")
+            with eu3:
+                edit_password = st.text_input("New Password (leave blank to keep)", type="password", key="edit_user_pass")
+            with eu4:
+                st.markdown("<br>", unsafe_allow_html=True)
+                if st.button("Update User", type="primary", use_container_width=True):
+                    pwd = edit_password if edit_password.strip() else None
+                    update_user(sel_user["username"],
+                                display_name=edit_display.strip(),
+                                role=edit_role,
+                                password=pwd)
+                    st.success(f"User '{sel_user['username']}' updated.")
+                    st.rerun()
+
+            # Delete button (prevent deleting yourself)
+            if sel_user["username"] != current_user:
+                if st.button(f"Delete user '{sel_user['username']}'", type="secondary"):
+                    delete_user(sel_user["username"])
+                    st.success(f"User '{sel_user['username']}' deleted.")
+                    st.rerun()
+            else:
+                st.caption("You cannot delete your own account while logged in.")
+        else:
+            st.warning("No users found.")
