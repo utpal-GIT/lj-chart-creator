@@ -16,6 +16,11 @@ import hashlib
 import secrets
 
 # ─── Authentication ──────────────────────────────────────────────────────────
+# Credentials come from TWO sources, merged at load time:
+#   1. st.secrets["users"] (permanent — survives cloud restarts)
+#   2. data/credentials.json  (runtime — admin-created users, ephemeral on cloud)
+# Secrets users take priority; JSON users fill in the rest.
+# ─────────────────────────────────────────────────────────────────────────────
 BASE_DATA_DIR = Path(__file__).parent / "data"
 BASE_DATA_DIR.mkdir(exist_ok=True)
 CREDENTIALS_FILE = BASE_DATA_DIR / "credentials.json"
@@ -29,8 +34,40 @@ def _hash_password(password: str, salt: str = None) -> tuple:
     return hashed, salt
 
 
-def load_credentials() -> dict:
-    """Load credentials from JSON file."""
+def _load_secrets_users() -> dict:
+    """Load users defined in st.secrets (secrets.toml / Streamlit Cloud dashboard).
+    Expected format in secrets.toml:
+        [users.admin]
+        password = "securepass"
+        display_name = "Administrator"
+        role = "admin"
+
+        [users.lab_tech]
+        password = "labpass123"
+        display_name = "Lab Technician"
+        role = "user"
+    """
+    secrets_users = {}
+    try:
+        if "users" in st.secrets:
+            for uname, info in st.secrets["users"].items():
+                pwd = info.get("password", "")
+                if pwd:
+                    hashed, salt = _hash_password(pwd, salt=f"secrets_salt_{uname}")
+                    secrets_users[uname] = {
+                        "hash": hashed,
+                        "salt": f"secrets_salt_{uname}",
+                        "display_name": info.get("display_name", uname),
+                        "role": info.get("role", "user"),
+                        "_source": "secrets",
+                    }
+    except Exception:
+        pass
+    return secrets_users
+
+
+def _load_json_users() -> dict:
+    """Load users from the local JSON file."""
     if CREDENTIALS_FILE.exists():
         try:
             with open(CREDENTIALS_FILE, "r") as f:
@@ -40,10 +77,22 @@ def load_credentials() -> dict:
     return {}
 
 
+def load_credentials() -> dict:
+    """Load merged credentials: secrets users + JSON users.
+    Secrets users take priority over JSON users with the same username."""
+    json_users = _load_json_users()
+    secrets_users = _load_secrets_users()
+    # Merge: secrets override JSON
+    merged = {**json_users, **secrets_users}
+    return merged
+
+
 def save_credentials(creds: dict):
-    """Save credentials to JSON file."""
+    """Save credentials to JSON file (only non-secrets users)."""
+    # Filter out secrets-sourced users — they live in secrets.toml
+    json_only = {k: v for k, v in creds.items() if v.get("_source") != "secrets"}
     with open(CREDENTIALS_FILE, "w") as f:
-        json.dump(creds, f, indent=2)
+        json.dump(json_only, f, indent=2)
 
 
 def verify_password(username: str, password: str) -> bool:
@@ -57,7 +106,7 @@ def verify_password(username: str, password: str) -> bool:
 
 
 def create_user(username: str, password: str, display_name: str = "", role: str = "user"):
-    """Create a new user with hashed password and role."""
+    """Create a new user with hashed password and role (saved to JSON)."""
     creds = load_credentials()
     hashed, salt = _hash_password(password)
     creds[username] = {
@@ -98,18 +147,28 @@ def update_user(username: str, display_name: str = None, role: str = None, passw
         hashed, salt = _hash_password(password)
         creds[username]["hash"] = hashed
         creds[username]["salt"] = salt
+    # If updating a secrets user, save to JSON as an override
+    creds[username].pop("_source", None)
     save_credentials(creds)
     return True
 
 
 def delete_user(username: str) -> bool:
-    """Delete a user from credentials."""
+    """Delete a user from credentials (cannot delete secrets-sourced users)."""
     creds = load_credentials()
     if username not in creds:
         return False
+    if creds[username].get("_source") == "secrets":
+        return False  # Can't delete secrets users from the app
     del creds[username]
     save_credentials(creds)
     return True
+
+
+def is_secrets_user(username: str) -> bool:
+    """Check if a user is defined in st.secrets (permanent)."""
+    creds = load_credentials()
+    return creds.get(username, {}).get("_source") == "secrets"
 
 
 def list_all_users() -> list:
@@ -121,24 +180,26 @@ def list_all_users() -> list:
             "username": uname,
             "display_name": info.get("display_name", uname),
             "role": info.get("role", "user"),
+            "source": "secrets" if info.get("_source") == "secrets" else "local",
         })
     return users
 
 
-# Create default admin user if no credentials exist
-if not CREDENTIALS_FILE.exists() or not load_credentials():
+# Create default admin user if no credentials exist (and none in secrets)
+_all_creds = load_credentials()
+if not _all_creds:
     create_user("admin", "admin123", "Administrator", role="admin")
 else:
-    # Migrate: ensure all existing users have a 'role' field
-    _creds = load_credentials()
+    # Migrate: ensure all existing JSON users have a 'role' field
+    _json_creds = _load_json_users()
     _migrated = False
-    for _u, _info in _creds.items():
+    for _u, _info in _json_creds.items():
         if "role" not in _info:
-            # First user (typically 'admin') gets admin role; rest get 'user'
             _info["role"] = "admin" if _u == "admin" else "user"
             _migrated = True
     if _migrated:
-        save_credentials(_creds)
+        with open(CREDENTIALS_FILE, "w") as f:
+            json.dump(_json_creds, f, indent=2)
 
 
 # ─── Persistence (auto-save / auto-load) — per-user directories ─────────────
@@ -953,8 +1014,12 @@ if st.session_state.get("show_change_password", False):
                     st.error("Password must be at least 4 characters.")
                 else:
                     update_user(current_user, password=new_pass)
+                    # Track for secrets.toml generation
+                    if "_user_passwords" not in st.session_state:
+                        st.session_state._user_passwords = {}
+                    st.session_state._user_passwords[current_user] = new_pass
                     st.session_state["show_change_password"] = False
-                    st.success("Password changed successfully!")
+                    st.success("Password changed successfully! If on cloud, update Secrets to make it permanent.")
                     st.rerun()
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1458,6 +1523,10 @@ if is_admin:
                     st.error(f"User '{uname}' already exists.")
                 else:
                     create_user(uname, new_password, new_display.strip() or uname, role=new_role)
+                    # Track plain password for secrets.toml generation
+                    if "_user_passwords" not in st.session_state:
+                        st.session_state._user_passwords = {}
+                    st.session_state._user_passwords[uname] = new_password
                     st.success(f"User '{uname}' created as {new_role}.")
                     st.rerun()
 
@@ -1470,17 +1539,20 @@ if is_admin:
             user_rows_html = ""
             for u in all_users:
                 role_badge_color = "#3b82f6" if u["role"] == "admin" else "#64748b"
+                src = u.get("source", "local")
+                src_badge = '<span style="background:#10b981; color:white; padding:2px 8px; border-radius:12px; font-size:0.8em;">Permanent</span>' if src == "secrets" else '<span style="background:#94a3b8; color:white; padding:2px 8px; border-radius:12px; font-size:0.8em;">Session</span>'
                 user_rows_html += f"""
                 <tr>
                     <td>{u['username']}</td>
                     <td>{u['display_name']}</td>
                     <td><span style="background:{role_badge_color}; color:white; padding:2px 10px;
                          border-radius:12px; font-size:0.85em; font-weight:600;">{u['role'].capitalize()}</span></td>
+                    <td>{src_badge}</td>
                 </tr>"""
 
             st.markdown(f"""
             <table class="config-table">
-                <thead><tr><th>Username</th><th>Display Name</th><th>Role</th></tr></thead>
+                <thead><tr><th>Username</th><th>Display Name</th><th>Role</th><th>Storage</th></tr></thead>
                 <tbody>{user_rows_html}</tbody>
             </table>
             """, unsafe_allow_html=True)
@@ -1512,16 +1584,97 @@ if is_admin:
                                 display_name=edit_display.strip(),
                                 role=edit_role,
                                 password=pwd)
+                    # Track password for secrets.toml generation
+                    if pwd:
+                        if "_user_passwords" not in st.session_state:
+                            st.session_state._user_passwords = {}
+                        st.session_state._user_passwords[sel_user["username"]] = pwd
                     st.success(f"User '{sel_user['username']}' updated.")
                     st.rerun()
 
-            # Delete button (prevent deleting yourself)
-            if sel_user["username"] != current_user:
+            # Delete button (prevent deleting yourself or secrets users)
+            if sel_user["username"] == current_user:
+                st.caption("You cannot delete your own account while logged in.")
+            elif sel_user.get("source") == "secrets":
+                st.caption("This user is defined in secrets.toml and cannot be deleted from the app. Edit secrets.toml or the Streamlit Cloud dashboard instead.")
+            else:
                 if st.button(f"Delete user '{sel_user['username']}'", type="secondary"):
                     delete_user(sel_user["username"])
                     st.success(f"User '{sel_user['username']}' deleted.")
                     st.rerun()
-            else:
-                st.caption("You cannot delete your own account while logged in.")
         else:
             st.warning("No users found.")
+
+        # ── Sync to Cloud ────────────────────────────────────────────────────
+        st.markdown("---")
+        st.markdown('<div class="section-title">Sync Users to Cloud (Make Permanent)</div>', unsafe_allow_html=True)
+        st.caption(
+            "Users created above are stored locally and will reset if the cloud app restarts. "
+            "To make them **permanent**, copy the generated secrets below and paste into your "
+            "**Streamlit Cloud dashboard** → App Settings → Secrets."
+        )
+
+        # Build secrets.toml content from all users
+        all_for_secrets = list_all_users()
+        # Get passwords: from session memory or from secrets.toml (existing secrets users)
+        session_passwords = st.session_state.get("_user_passwords", {})
+
+        secrets_lines = [
+            "# ─── LJ Chart Creator: User Credentials ───────────────────",
+            "# Paste this into Streamlit Cloud → App Settings → Secrets",
+            "# Then click Save. All users below will be permanent.",
+            "",
+        ]
+        users_needing_password = []
+        for u in all_for_secrets:
+            uname = u["username"]
+            # Try to get password from: session memory → secrets source → unknown
+            if uname in session_passwords:
+                pwd = session_passwords[uname]
+            elif u.get("source") == "secrets":
+                # Already in secrets, get from st.secrets
+                try:
+                    pwd = st.secrets["users"][uname]["password"]
+                except Exception:
+                    pwd = None
+            else:
+                pwd = None
+
+            if pwd:
+                secrets_lines.append(f'[users.{uname}]')
+                secrets_lines.append(f'password = "{pwd}"')
+                secrets_lines.append(f'display_name = "{u["display_name"]}"')
+                secrets_lines.append(f'role = "{u["role"]}"')
+                secrets_lines.append("")
+            else:
+                users_needing_password.append(uname)
+
+        if users_needing_password:
+            secrets_lines.append("# ⚠️ The following users need passwords filled in manually:")
+            for uname in users_needing_password:
+                u_info = next((u for u in all_for_secrets if u["username"] == uname), {})
+                secrets_lines.append(f'[users.{uname}]')
+                secrets_lines.append(f'password = "ENTER_PASSWORD_HERE"')
+                secrets_lines.append(f'display_name = "{u_info.get("display_name", uname)}"')
+                secrets_lines.append(f'role = "{u_info.get("role", "user")}"')
+                secrets_lines.append("")
+
+        secrets_content = "\n".join(secrets_lines)
+
+        st.code(secrets_content, language="toml")
+
+        st.download_button(
+            "Download secrets.toml",
+            data=secrets_content,
+            file_name="secrets.toml",
+            mime="text/plain",
+            use_container_width=True,
+        )
+
+        st.info(
+            "**How to apply:**\n"
+            "1. Copy the content above (or download the file)\n"
+            "2. Go to [Streamlit Cloud](https://share.streamlit.io) → Your app → Settings → Secrets\n"
+            "3. Paste and click Save\n"
+            "4. The app will reboot with all users permanently saved"
+        )
